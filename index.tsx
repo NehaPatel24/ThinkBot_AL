@@ -31,16 +31,37 @@ const App = () => {
   }, []);
 
 
-  // Text-to-speech function with language support
-  const speak = (text: string, lang: string) => {
+  // Text-to-speech function with language and gender support
+  const speak = (text: string, lang: string, gender: 'male' | 'female' | 'neutral') => {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = lang;
 
-    // Find a matching voice for the specified language
-    const voice = voices.find(v => v.lang === lang) || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-    if (voice) {
-      utterance.voice = voice;
+    // 1. Get all voices for the target language
+    const langVoices = voices.filter(v => v.lang === lang || v.lang.startsWith(lang.split('-')[0]));
+
+    if (langVoices.length > 0) {
+        let selectedVoice: SpeechSynthesisVoice | undefined;
+
+        // 2. If gender is specified, try to find a matching voice
+        if (gender === 'male' || gender === 'female') {
+            const genderVoices = langVoices.filter(v => v.name.toLowerCase().includes(gender));
+            if (genderVoices.length > 0) {
+                // Prefer non-local service voices if available
+                selectedVoice = genderVoices.find(v => !v.localService) || genderVoices[0];
+            }
+        }
+
+        // 3. If no gender-specific voice found, or gender is neutral, find a default or first available voice for the language
+        if (!selectedVoice) {
+            // Prefer a default voice for the language if one exists
+            selectedVoice = langVoices.find(v => v.default) || langVoices.find(v => !v.localService) || langVoices[0];
+        }
+        
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        }
+
     } else {
       console.warn(`No voice found for language: ${lang}. Using browser default.`);
     }
@@ -136,7 +157,7 @@ const App = () => {
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             config: {
-              systemInstruction: `You are an AI avatar. Your current role is "${currentRole}". Respond to the user's message naturally, in character, and in the same language as the user's message (e.g. Hindi, English). Your response will be spoken, so it should sound like natural speech.`,
+              systemInstruction: `You are an AI avatar. Your current role is "${currentRole}". Respond to the user's message naturally, in character, and in the same language as the user's message (e.g. Hindi, English). Based on your role, determine if your voice should be "male", "female", or "neutral". Your response will be spoken, so it should sound like natural speech.`,
               responseMimeType: "application/json",
               responseSchema: {
                 type: Type.OBJECT,
@@ -149,8 +170,12 @@ const App = () => {
                     type: Type.STRING,
                     description: 'The text of the spoken response.',
                   },
+                  gender: {
+                    type: Type.STRING,
+                    description: 'The gender of the character for voice selection. Can be "male", "female", or "neutral".'
+                  }
                 },
-                required: ["language", "response"],
+                required: ["language", "response", "gender"],
               }
             },
             contents: currentPrompt,
@@ -160,9 +185,9 @@ const App = () => {
         const jsonString = responseText.startsWith('```json') ? responseText.slice(7, -3).trim() : responseText;
 
         try {
-            const { language, response: textResponse } = JSON.parse(jsonString);
+            const { language, response: textResponse, gender } = JSON.parse(jsonString);
             if (textResponse) {
-                speak(textResponse, language);
+                speak(textResponse, language, gender);
             } else {
                 setError("I'm sorry, I couldn't think of a response.");
                 setPrompt(currentPrompt); // Restore prompt on failure
@@ -171,7 +196,7 @@ const App = () => {
             console.error("Failed to parse JSON response:", responseText, e);
             // Fallback for non-JSON response
             if(responseText) {
-                speak(responseText, 'en-US'); 
+                speak(responseText, 'en-US', 'neutral'); 
             } else {
                 setError("I'm sorry, I received an invalid response.");
                 setPrompt(currentPrompt);

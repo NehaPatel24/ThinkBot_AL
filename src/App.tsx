@@ -1,6 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Modality, Type } from '@google/genai';
 
+// Role to Gender mapping for reliable voice selection
+const roleToGender: Record<string, 'male' | 'female'> = {
+  // Male roles
+  king: 'male',
+  policeman: 'male',
+  police: 'male',
+  'police officer': 'male',
+  farmer: 'male',
+  doctor: 'male',
+  prince: 'male',
+  emperor: 'male',
+  pirate: 'male',
+  knight: 'male',
+  wizard: 'male',
+  detective: 'male',
+  man: 'male',
+  boy: 'male',
+  // Female roles
+  queen: 'female',
+  policewoman: 'female',
+  teacher: 'female',
+  dancer: 'female',
+  singer: 'female',
+  princess: 'female',
+  empress: 'female',
+  witch: 'female',
+  actress: 'female',
+  woman: 'female',
+  girl: 'female',
+};
+
+
 const App = () => {
   // State variables
   const [originalImage, setOriginalImage] = useState<{
@@ -30,16 +62,37 @@ const App = () => {
   }, []);
 
 
-  // Text-to-speech function with language support
-  const speak = (text: string, lang: string) => {
+  // Text-to-speech function with language and gender support
+  const speak = (text: string, lang: string, gender: 'male' | 'female' | 'neutral') => {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = lang;
 
-    // Find a matching voice for the specified language
-    const voice = voices.find(v => v.lang === lang) || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-    if (voice) {
-      utterance.voice = voice;
+    // 1. Get all voices for the target language
+    const langVoices = voices.filter(v => v.lang === lang || v.lang.startsWith(lang.split('-')[0]));
+
+    if (langVoices.length > 0) {
+        let selectedVoice: SpeechSynthesisVoice | undefined;
+
+        // 2. If gender is specified, try to find a matching voice
+        if (gender === 'male' || gender === 'female') {
+            const genderVoices = langVoices.filter(v => v.name.toLowerCase().includes(gender));
+            if (genderVoices.length > 0) {
+                // Prefer non-local service voices if available
+                selectedVoice = genderVoices.find(v => !v.localService) || genderVoices[0];
+            }
+        }
+
+        // 3. If no gender-specific voice found, or gender is neutral, find a default or first available voice for the language
+        if (!selectedVoice) {
+            // Prefer a default voice for the language if one exists
+            selectedVoice = langVoices.find(v => v.default) || langVoices.find(v => !v.localService) || langVoices[0];
+        }
+        
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
+        }
+
     } else {
       console.warn(`No voice found for language: ${lang}. Using browser default.`);
     }
@@ -131,11 +184,21 @@ const App = () => {
             setPrompt(currentPrompt); // Restore prompt on failure
         }
       } else {
-        // Step 2: Get voice response for the conversation with language detection
+        // Step 2: Get voice response for the conversation
+        
+        // Determine gender from the role map
+        const normalizedRole = currentRole.toLowerCase().trim();
+        const gender = roleToGender[normalizedRole] || 'neutral';
+
+        // Get conversational text from Gemini
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             config: {
-              systemInstruction: `You are an AI avatar. Your current role is "${currentRole}". Respond to the user's message naturally, in character, and in the same language as the user's message (e.g. Hindi, English). Your response will be spoken, so it should sound like natural speech.`,
+              systemInstruction: `You are an AI Avatar. Your current role is "${currentRole}".
+You must follow these rules:
+1. Stay fully in character for the role of "${currentRole}".
+2. Always reply in the same language the user speaks (e.g., Hindi or English).
+3. Your response will be spoken, so it should be conversational.`,
               responseMimeType: "application/json",
               responseSchema: {
                 type: Type.OBJECT,
@@ -161,7 +224,8 @@ const App = () => {
         try {
             const { language, response: textResponse } = JSON.parse(jsonString);
             if (textResponse) {
-                speak(textResponse, language);
+                // Speak with the predetermined gender
+                speak(textResponse, language, gender);
             } else {
                 setError("I'm sorry, I couldn't think of a response.");
                 setPrompt(currentPrompt); // Restore prompt on failure
@@ -170,7 +234,7 @@ const App = () => {
             console.error("Failed to parse JSON response:", responseText, e);
             // Fallback for non-JSON response
             if(responseText) {
-                speak(responseText, 'en-US'); 
+                speak(responseText, 'en-US', gender); 
             } else {
                 setError("I'm sorry, I received an invalid response.");
                 setPrompt(currentPrompt);
